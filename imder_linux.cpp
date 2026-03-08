@@ -238,99 +238,60 @@ static QString mainBtnStyle(){return R"(
                                                                             }
 
                                                                             namespace GIF {
-                                                                                static constexpr int RL=8,GL=8,BL=4;
-                                                                                static uint8_t PAL[256][3];
-                                                                                static bool palBuilt=false;
-
-                                                                                static void buildPalette(){
-                                                                                    if(palBuilt) return;
-                                                                                    int idx=0;
-                                                                                    for(int b=0;b<BL;b++) for(int g=0;g<GL;g++) for(int r=0;r<RL;r++){
-                                                                                        PAL[idx][0]=(uint8_t)(r*255/(RL-1));
-                                                                                        PAL[idx][1]=(uint8_t)(g*255/(GL-1));
-                                                                                        PAL[idx][2]=(uint8_t)(b*255/(BL-1));
-                                                                                        idx++;
-                                                                                    }
-                                                                                    palBuilt=true;
-                                                                                }
-                                                                                static uint8_t nearest(uint8_t r,uint8_t g,uint8_t b){
-                                                                                    int ri=(int)(r*(RL-1)+127)/255;
-                                                                                    int gi=(int)(g*(GL-1)+127)/255;
-                                                                                    int bi=(int)(b*(BL-1)+127)/255;
-                                                                                    return (uint8_t)(bi*RL*GL+gi*RL+ri);
-                                                                                }
-                                                                                static void lzwEncode(FILE* fp,const uint8_t* idx,int n){
-                                                                                    const int CLEAR=256,EOI=257;
-                                                                                    fputc(8,fp);
-                                                                                    const int HS=5003;
-                                                                                    std::vector<int32_t> hk(HS,-1),hv(HS,-1);
-                                                                                    auto hfind=[&](int32_t k)->int{
-                                                                                        int h=(int)(((uint32_t)k*2654435761u)%HS);
-                                                                                        for(int i=0;i<HS;i++){if(hk[h]==-1)return -1;if(hk[h]==k)return hv[h];h=(h+1)%HS;}
-                                                                                        return -1;};
-                                                                                        auto hset=[&](int32_t k,int32_t v){
-                                                                                            int h=(int)(((uint32_t)k*2654435761u)%HS);
-                                                                                            while(hk[h]!=-1&&hk[h]!=k)h=(h+1)%HS;
-                                                                                            hk[h]=k;hv[h]=v;};
-                                                                                            uint32_t bbuf=0;int bcnt=0;
-                                                                                            uint8_t blk[256];int bpos=1;
-                                                                                            auto flush=[&](){blk[0]=(uint8_t)(bpos-1);fwrite(blk,1,bpos,fp);bpos=1;};
-                                                                                            auto put=[&](uint32_t code,int nb){
-                                                                                                bbuf|=code<<bcnt;bcnt+=nb;
-                                                                                                while(bcnt>=8){blk[bpos++]=bbuf&0xFF;bbuf>>=8;bcnt-=8;if(bpos==256)flush();}};
-                                                                                                int nc=EOI+1,cs=9,mc=512;
-                                                                                                auto clearT=[&](){std::fill(hk.begin(),hk.end(),-1);nc=EOI+1;cs=9;mc=512;};
-                                                                                                clearT(); put(CLEAR,cs);
-                                                                                                if(n==0){put(EOI,cs);if(bcnt>0)blk[bpos++]=bbuf&0xFF;if(bpos>1)flush();fputc(0,fp);return;}
-                                                                                                int prefix=idx[0];
-                                                                                                for(int i=1;i<n;i++){
-                                                                                                    int c=idx[i]; int32_t key=(int32_t)(prefix<<8)|c;
-                                                                                                    int found=hfind(key);
-                                                                                                    if(found>=0){prefix=found;}
-                                                                                                    else{
-                                                                                                        put(prefix,cs);
-                                                                                                        if(nc<4096){hset(key,nc++);if(nc>=mc&&cs<12){cs++;mc=1<<cs;}}
-                                                                                                        else{put(CLEAR,cs);clearT();}
-                                                                                                        prefix=c;
-                                                                                                    }
-                                                                                                }
-                                                                                                put(prefix,cs);put(EOI,cs);
-                                                                                                if(bcnt>0)blk[bpos++]=bbuf&0xFF;
-                                                                                                if(bpos>1)flush();fputc(0,fp);
-                                                                                }
-
+                                                                                // GIF encoder using ffmpeg - reliable and produces valid GIFs
                                                                                 struct Encoder {
-                                                                                    FILE* fp=nullptr; int w,h,delayCS;
-                                                                                    bool open(const std::string& path,int W,int H,int delay_ms){
-                                                                                        buildPalette();
-                                                                                        fp=fopen(path.c_str(),"wb"); if(!fp)return false;
-                                                                                        w=W;h=H;delayCS=delay_ms/10;
-                                                                                        fwrite("GIF89a",1,6,fp);
-                                                                                        uint16_t W2=(uint16_t)W,H2=(uint16_t)H;
-                                                                                        fwrite(&W2,2,1,fp);fwrite(&H2,2,1,fp);
-                                                                                        uint8_t pk=0xF7;fwrite(&pk,1,1,fp);
-                                                                                        uint8_t bg=0,asp=0;fwrite(&bg,1,1,fp);fwrite(&asp,1,1,fp);
-                                                                                        for(int i=0;i<256;i++) fwrite(PAL[i],1,3,fp);
-                                                                                        uint8_t ns[]={0x21,0xFF,0x0B,'N','E','T','S','C','A','P','E','2','.','0',
-                                                                                            0x03,0x01,0x00,0x00,0x00};
-                                                                                            fwrite(ns,1,sizeof(ns),fp);
-                                                                                            return true;
+                                                                                    std::string outputPath;
+                                                                                    std::string tmpDir;
+                                                                                    std::vector<cv::Mat> frames;
+                                                                                    int w, h, delayMs;
+                                                                                    
+                                                                                    bool open(const std::string& path, int W, int H, int delay_ms) {
+                                                                                        w = W; h = H; delayMs = delay_ms;
+                                                                                        outputPath = path;
+                                                                                        frames.clear();
+                                                                                        
+                                                                                        // Create temp directory for frames
+                                                                                        char tmp[] = "/tmp/imder_gif_XXXXXX";
+                                                                                        if (!mkdtemp(tmp)) return false;
+                                                                                        tmpDir = tmp;
+                                                                                        return true;
                                                                                     }
-                                                                                    void writeFrame(const cv::Mat& rgb){
-                                                                                        uint8_t gce[]={0x21,0xF9,0x04,0x00,
-                                                                                            (uint8_t)(delayCS&0xFF),(uint8_t)(delayCS>>8),0x00,0x00};
-                                                                                            fwrite(gce,1,8,fp);
-                                                                                            fputc(0x2C,fp);
-                                                                                            uint16_t x=0,y=0,W2=(uint16_t)w,H2=(uint16_t)h;
-                                                                                            fwrite(&x,2,1,fp);fwrite(&y,2,1,fp);fwrite(&W2,2,1,fp);fwrite(&H2,2,1,fp);
-                                                                                            fputc(0,fp);
-                                                                                            int n=rgb.rows*rgb.cols;
-                                                                                            std::vector<uint8_t> idx(n);
-                                                                                            const uint8_t* p=rgb.data;
-                                                                                            for(int i=0;i<n;i++,p+=3) idx[i]=nearest(p[0],p[1],p[2]);
-                                                                                            lzwEncode(fp,idx.data(),n);
+                                                                                    
+                                                                                    void writeFrame(const cv::Mat& rgb) {
+                                                                                        frames.push_back(rgb.clone());
                                                                                     }
-                                                                                    void close(){if(fp){fputc(0x3B,fp);fclose(fp);fp=nullptr;}}
+                                                                                    
+                                                                                    void close() {
+                                                                                        if (frames.empty()) return;
+                                                                                        
+                                                                                        // Write frames as PNG files
+                                                                                        for (size_t i = 0; i < frames.size(); i++) {
+                                                                                            cv::Mat bgr;
+                                                                                            cv::cvtColor(frames[i], bgr, cv::COLOR_RGB2BGR);
+                                                                                            std::string framePath = tmpDir + "/frame_" + std::to_string(i) + ".png";
+                                                                                            cv::imwrite(framePath, bgr);
+                                                                                        }
+                                                                                        
+                                                                                        // Calculate framerate from delay (delay is in centiseconds)
+                                                                                        // delayMs is in milliseconds, convert to fps
+                                                                                        double fps = 1000.0 / std::max(10, delayMs);
+                                                                                        
+                                                                                        // Use ffmpeg to create GIF
+                                                                                        std::string cmd = "ffmpeg -y -framerate " + std::to_string(fps) + 
+                                                                                            " -i " + tmpDir + "/frame_%d.png" +
+                                                                                            " -vf \"scale=" + std::to_string(w) + ":" + std::to_string(h) + ":flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse\"" +
+                                                                                            " -loop 0 \"" + outputPath + "\" >/dev/null 2>&1";
+                                                                                        
+                                                                                        system(cmd.c_str());
+                                                                                        
+                                                                                        // Cleanup temp files
+                                                                                        for (size_t i = 0; i < frames.size(); i++) {
+                                                                                            std::string framePath = tmpDir + "/frame_" + std::to_string(i) + ".png";
+                                                                                            remove(framePath.c_str());
+                                                                                        }
+                                                                                        rmdir(tmpDir.c_str());
+                                                                                        frames.clear();
+                                                                                    }
                                                                                 };
                                                                             }
 
