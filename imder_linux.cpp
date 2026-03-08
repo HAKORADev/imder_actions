@@ -2025,3 +2025,5 @@ static QString mainBtnStyle(){return R"(
                                                                                                                                                                                                                                             win.show();
                                                                                                                                                                                                                                             return app.exec();
                                                                                                                                                                                                                                         }
+
+#include "imder_linux.moc"
