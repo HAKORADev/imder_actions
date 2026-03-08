@@ -1,0 +1,113 @@
+name: Build Imder Linux
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qt5-qmake \
+            qtbase5-dev \
+            qtbase5-dev-tools \
+            libqt5widgets5 \
+            libqt5gui5 \
+            libqt5core5a \
+            libopencv-dev \
+            libgl1-mesa-dev \
+            file \
+            wget \
+            desktop-file-utils
+
+      - name: Create project file
+        run: |
+          cat > imder.pro << 'EOF'
+          QT += widgets core gui
+          CONFIG += c++17 release
+          TARGET = imder
+          TEMPLATE = app
+          SOURCES += imder_linux.cpp
+          LIBS += -lopencv_core -lopencv_imgproc -lopencv_imgcodecs -lopencv_videoio
+          LIBS += -lpthread -lGL
+          INCLUDEPATH += /usr/include/opencv4
+          EOF
+
+      - name: Build with qmake
+        run: |
+          qmake imder.pro
+          make -j$(nproc)
+          ls -la imder
+          file imder
+
+      - name: Download linuxdeployqt
+        run: |
+          wget -q https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage
+          chmod +x linuxdeployqt-continuous-x86_64.AppImage
+
+      - name: Create AppDir structure
+        run: |
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+
+          cp imder AppDir/usr/bin/
+          cp imder.png AppDir/usr/share/icons/hicolor/256x256/apps/ || true
+
+          cat > AppDir/usr/share/applications/imder.desktop << 'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Imder
+          Exec=imder
+          Icon=imder
+          Categories=Graphics;Video;
+          EOF
+
+      - name: Create AppImage
+        run: |
+          export VERSION="1.0.0"
+          export QMAKE=/usr/bin/qmake
+          export DISABLE_COPYRIGHT_FILES_DEPLOYMENT=1
+
+          # First pass to gather libs
+          ./linuxdeployqt-continuous-x86_64.AppImage AppDir/usr/share/applications/imder.desktop -verbose=1 -no-translations -bundle-non-qt-libs || true
+
+          # Second pass to create AppImage
+          ./linuxdeployqt-continuous-x86_64.AppImage AppDir/usr/share/applications/imder.desktop -verbose=1 -no-translations -appimage || true
+
+          ls -la *.AppImage || true
+
+      - name: Package artifact
+        run: |
+          # Find and rename AppImage
+          APPIMAGE=$(ls *.AppImage 2>/dev/null | head -1)
+          if [ -n "$APPIMAGE" ]; then
+            mv "$APPIMAGE" imder.AppImage
+            chmod +x imder.AppImage
+            mkdir -p release
+            cp imder.AppImage release/imder
+          else
+            # Fallback: just use the raw binary (user needs to install deps)
+            mkdir -p release
+            cp imder release/imder
+          fi
+          chmod +x release/imder
+          ls -la release/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: imder-linux
+          path: release/imder
+          retention-days: 30
