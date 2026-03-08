@@ -19,6 +19,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            cmake \
             qt5-qmake \
             qtbase5-dev \
             qtbase5-dev-tools \
@@ -31,25 +32,14 @@ jobs:
             wget \
             desktop-file-utils
 
-      - name: Create project file
+      - name: Build with CMake
         run: |
-          cat > imder.pro << 'EOF'
-          QT += widgets core gui
-          CONFIG += c++17 release
-          TARGET = imder
-          TEMPLATE = app
-          SOURCES += imder_linux.cpp
-          LIBS += -lopencv_core -lopencv_imgproc -lopencv_imgcodecs -lopencv_videoio
-          LIBS += -lpthread -lGL
-          INCLUDEPATH += /usr/include/opencv4
-          EOF
-
-      - name: Build with qmake
-        run: |
-          qmake imder.pro
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
           make -j$(nproc)
           ls -la imder
           file imder
+          ldd imder || true
 
       - name: Download linuxdeployqt
         run: |
@@ -62,7 +52,7 @@ jobs:
           mkdir -p AppDir/usr/share/applications
           mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
 
-          cp imder AppDir/usr/bin/
+          cp build/imder AppDir/usr/bin/
           cp imder.png AppDir/usr/share/icons/hicolor/256x256/apps/ || true
 
           cat > AppDir/usr/share/applications/imder.desktop << 'EOF'
@@ -100,7 +90,7 @@ jobs:
           else
             # Fallback: just use the raw binary (user needs to install deps)
             mkdir -p release
-            cp imder release/imder
+            cp build/imder release/imder
           fi
           chmod +x release/imder
           ls -la release/
